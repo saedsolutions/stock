@@ -1,13 +1,13 @@
 const { chromium } = require('playwright');
 const { Client } = require('pg');
 
-// PostgreSQL connection for local server (same as before)
+// PostgreSQL connection for local server
 const pgConfig = {
     host: 'localhost',
     port: 5432,
-    user: 'stock_user',
-    password: 'your_password', // Replace with your actual password
-    database: 'stock_db'
+    user: 'dozer',
+    password: '123',
+    database: 'dozer'
 };
 
 // Stock symbol and aliases
@@ -17,15 +17,18 @@ const searchTerms = [stockSymbol, ...aliases];
 
 // Function to scrape X search results for a given term
 async function scrapeXSearch(term, pageLimit = 1) {
-    const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
+    const browser = await chromium.launch({ headless: false});
+    const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    });
+    const page = await context.newPage();
 
     const url = `https://twitter.com/search?q=${encodeURIComponent(term)}&src=typed_query&f=live`;
     console.log(`Scraping posts for: ${term}`);
 
     try {
         await page.goto(url, { waitUntil: 'domcontentloaded' });
-        await page.waitForSelector('[data-testid="tweet"]', { timeout: 10000 });
+        await page.waitForSelector('article[role="article"]', { timeout: 10000 });
 
         let posts = [];
         let pageCount = 0;
@@ -34,14 +37,25 @@ async function scrapeXSearch(term, pageLimit = 1) {
             await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
             await new Promise(resolve => setTimeout(resolve, 2000));
 
-            const newPosts = await page.$$eval('[data-testid="tweet"]', tweets => {
+            const newPosts = await page.$$eval('article[role="article"]', tweets => {
                 return tweets.map(tweet => {
-                    const username = tweet.querySelector('a[href*="/"]')?.innerText || 'Unknown';
-                    const text = tweet.querySelector('[data-testid="tweetText"]')?.innerText || '';
-                    const time = tweet.querySelector('time')?.getAttribute('datetime') || '';
-                    const retweets = tweet.querySelector('[data-testid="retweet"]')?.innerText || '0';
-                    const likes = tweet.querySelector('[data-testid="like"]')?.innerText || '0';
-                    return { username, text, created_at: time, retweets: parseInt(retweets) || 0, likes: parseInt(likes) || 0 };
+                    const usernameElement = tweet.querySelector('div > div > div > div > div > a[href*="/"] span');
+                    const username = usernameElement ? usernameElement.innerText : 'Unknown';
+                    const textElement = tweet.querySelector('[data-testid="tweetText"]');
+                    const text = textElement ? textElement.innerText : '';
+                    const timeElement = tweet.querySelector('time');
+                    const time = timeElement ? timeElement.getAttribute('datetime') : '';
+                    const retweetElement = tweet.querySelector('[data-testid="retweet"]');
+                    const retweets = retweetElement ? retweetElement.innerText : '0';
+                    const likeElement = tweet.querySelector('[data-testid="like"]');
+                    const likes = likeElement ? likeElement.innerText : '0';
+                    return {
+                        username,
+                        text,
+                        created_at: time,
+                        retweets: parseInt(retweets.replace(/[^0-9]/g, '')) || 0,
+                        likes: parseInt(likes.replace(/[^0-9]/g, '')) || 0
+                    };
                 });
             });
 
@@ -51,9 +65,10 @@ async function scrapeXSearch(term, pageLimit = 1) {
         }
 
         await browser.close();
-        return posts.filter(post => post.text && post.created_at); // Filter incomplete posts
+        return posts.filter(post => post.text && post.created_at);
     } catch (error) {
         console.error(`Error scraping "${term}":`, error.message);
+        await page.screenshot({ path: `error-${term}.png` });
         await browser.close();
         return [];
     }
@@ -91,7 +106,7 @@ async function scrapeStockPosts() {
     for (const term of searchTerms) {
         const posts = await scrapeXSearch(term);
         allPosts = allPosts.concat(posts.map(post => ({ ...post, query: term })));
-        await new Promise(resolve => setTimeout(resolve, 5000)); // 5s delay
+        await new Promise(resolve => setTimeout(resolve, 5000));
     }
 
     // Remove duplicates based on text and created_at

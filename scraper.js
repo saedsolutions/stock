@@ -1,54 +1,87 @@
 const { chromium } = require('playwright');
 const { Client } = require('pg');
-const { subWeeks, getUnixTime } = require('date-fns');
+const { subWeeks, getUnixTime, subDays } = require('date-fns');
+
+const pgConfig = {
+    host: 'localhost',
+    port: 5432,
+    user: 'dozer',
+    password: '123',
+    database: 'dozer'
+};
 
 // Configuration
 const ticker = 'AAPL';
-const weeks = 7; // 7-week chunk
-const endDate = new Date(); // Today (Feb 25, 2025, per context)
+const weeks = 7;
+const endDate = subDays(new Date(), 1); // Yesterday, to avoid incomplete today
 const startDate = subWeeks(endDate, weeks); // 7 weeks ago
 const startTimestamp = getUnixTime(startDate);
 const endTimestamp = getUnixTime(endDate);
 const url = `https://finance.yahoo.com/quote/${ticker}/history/?guccounter=1&period1=${startTimestamp}&period2=${endTimestamp}`;
 
-
-
-// Scrape Yahoo Finance
 async function scrapeYahooFinance() {
-    const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
-
-    console.log(`Navigating to ${url}`);
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
-
-    // Wait for the historical data table
-    await page.waitForSelector('table[data-testid="history-table"]', { timeout: 10000 });
-
-    // Extract table HTML
-    const tableHtml = await page.$eval('table[data-testid="history-table"]', table => table.outerHTML);
-    await browser.close();
-
-    // Parse HTML (rudimentary parsing without a full DOM parser for simplicity)
-    const rows = tableHtml.match(/<tr.*?>.*?<\/tr>/g).slice(1); // Skip header row
-    const data = rows.map(row => {
-        const cells = row.match(/<td.*?>.*?<\/td>/g).map(cell => cell.replace(/<.*?>/g, '').replace(/,/g, ''));
-        return {
-            date: new Date(cells[0]).toISOString().split('T')[0], // Convert to YYYY-MM-DD
-            open: parseFloat(cells[1]),
-            high: parseFloat(cells[2]),
-            low: parseFloat(cells[3]),
-            close: parseFloat(cells[4]),
-            volume: parseInt(cells[6], 10) // Skip Adj Close (cells[5])
-        };
+    // Launch browser in non-headless mode for debugging
+    const browser = await chromium.launch({ headless: false });
+    const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     });
+    const page = await context.newPage();
+    // Continue with your scraping logic
 
-    return data.filter(row => row.open && row.high && row.low && row.close && row.volume); // Filter incomplete rows
+    try {
+        // Navigate and wait for initial load
+        await page.goto(url, { waitUntil: 'domcontentloaded' });
+        console.log('Page loaded');
+        await page.waitForTimeout(20000); // Initial wait for dynamic content
+        console.log('Waited 2 seconds');
+        const tableExists = await page.evaluate(() => !!document.querySelector('#nimbus-app > section > section > section > article > div.container > div.table-container.yf-1jecxey table'));
+
+        console.log('Table exists:', tableExists);
+        const rowCount = await page.evaluate(() => {
+            const table = document.querySelector(`table[class="W(100%)"]`)
+            return table ? table.querySelectorAll('tr').length : 0;
+        });
+        console.log('Row count:', rowCount);
+        // Wait until the table exists and has data rows (timeout 60s)
+        await page.waitForFunction(() => {
+            const table = document.querySelector(('#nimbus-app > section > section > section > article > div.container > div.table-container.yf-1jecxey table'));
+            if (table) {
+                const rows = table.querySelectorAll('tr');
+                return rows.length > 1; // More than just header
+            }
+            return false;
+        }, { timeout: 60000 });
+        console.log('Table found with data');
+
+        // Extract table HTML
+        const tableHtml = await page.$eval(('#nimbus-app > section > section > section > article > div.container > div.table-container.yf-1jecxey table'), table => table.outerHTML);
+        await browser.close();
+
+        // Parse HTML
+        const rows = tableHtml.match(/<tr.*?>.*?<\/tr>/g).slice(1); // Skip header
+        const data = rows.map(row => {
+            const cells = row.match(/<td.*?>.*?<\/td>/g).map(cell => cell.replace(/<.*?>/g, '').replace(/,/g, ''));
+            return {
+                date: new Date(cells[0]).toISOString().split('T')[0],
+                open: parseFloat(cells[1]),
+                high: parseFloat(cells[2]),
+                low: parseFloat(cells[3]),
+                close: parseFloat(cells[4]),
+                volume: parseInt(cells[6], 10) // Skip Adj Close
+            };
+        });
+
+        return data.filter(row => row.open && row.high && row.low && row.close && row.volume);
+    } catch (error) {
+        console.error('Error in scrapeYahooFinance:', error);
+        await page.screenshot({ path: 'error_screenshot.png' }); // Save screenshot for debugging
+        await browser.close();
+        return [];
+    }
 }
 
-// Upload to PostgreSQL
 async function uploadToPostgres(data) {
     const client = new Client(pgConfig);
-
     try {
         await client.connect();
         console.log('Connected to PostgreSQL');
@@ -70,17 +103,16 @@ async function uploadToPostgres(data) {
     }
 }
 
-// Main execution
 (async () => {
     try {
         const scrapedData = await scrapeYahooFinance();
         if (scrapedData.length > 0) {
-            console.log(`Scraped ${scrapedData.length} rows:`, scrapedData.slice(0, 2)); // Preview first 2 rows
+            console.log(`Scraped ${scrapedData.length} rows:`, scrapedData.slice(0, 2));
             await uploadToPostgres(scrapedData);
         } else {
             console.log('No data scraped.');
         }
     } catch (error) {
-        console.error('Error during scraping:', error);
+        console.error('Error during execution:', error);
     }
 })();

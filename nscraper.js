@@ -1,13 +1,12 @@
 const { chromium } = require('playwright');
 const { Client } = require('pg');
 
-// PostgreSQL connection (same as before)
 const pgConfig = {
     host: 'localhost',
     port: 5432,
-    user: 'stock_user',
-    password: 'your_password', // Replace with your actual password
-    database: 'stock_db'
+    user: 'dozer',
+    password: '123', // Use the password you created
+    database: 'dozer'
 };
 
 // Stock symbol to search
@@ -50,7 +49,7 @@ async function scrapeYahooFinanceNews(symbol) {
                     url
                 });
 
-                await new Promise(resolve => setTimeout(resolve, 2000)); // Delay between articles
+                await new Promise(resolve => setTimeout(resolve, 20000)); // Delay between articles
             } catch (error) {
                 console.error(`Error scraping Yahoo article ${url}:`, error.message);
             }
@@ -67,14 +66,14 @@ async function scrapeYahooFinanceNews(symbol) {
 
 // Function to scrape Reuters news
 async function scrapeReutersNews(symbol) {
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: false });
     const page = await browser.newPage();
     const url = `https://www.reuters.com/site-search/?query=${symbol}`;
 
     console.log(`Scraping Reuters news for ${symbol}`);
     try {
         await page.goto(url, { waitUntil: 'domcontentloaded' });
-        await page.waitForSelector('article', { timeout: 10000 }); // Article container
+        await page.waitForSelector('#fusion-app > div.search-layout__body__1FDkI > div.search-layout__main__L267c > div > div:nth-child(3) > div.search-results__list-container__L8WZg > ul > li:nth-child(1) > div.title__title__29EfZ.story-card__area-headline__2ZAtJ > ',{timeout: 1000})
 
         // Extract news article links
         const articleLinks = await page.$$eval('a[href*="/article/"]', links =>
